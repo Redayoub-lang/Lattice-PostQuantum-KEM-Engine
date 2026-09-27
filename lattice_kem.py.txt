@@ -1,0 +1,102 @@
+"""
+Ring Learning-With-Errors (Ring-LWE) Key Encapsulation Mechanism
+Developer: Ayoub Lahmar (@Redayoub-lang)
+Domain: Applied Mathematics, Polynomial Ring Algebra & Post-Quantum Cryptography
+"""
+
+import numpy as np
+
+
+class RingLWEKEM:
+
+  def __init__(self, n: int = 256, q: int = 3329, std_dev: float = 1.5):
+    """
+    :param n: Polynomial ring dimension (degree bound, power of 2).
+    :param q: Prime modulus.
+    :param std_dev: Standard deviation for discrete Gaussian error sampling.
+    """
+    self.n = n
+    self.q = q
+    self.std_dev = std_dev
+
+  def sample_discrete_gaussian(self) -> np.ndarray:
+    """Samples coefficients from a centered discrete Gaussian distribution in Z_q."""
+    samples = np.random.normal(0, self.std_dev, self.n).round().astype(np.int64)
+    return samples % self.q
+
+  def poly_mul_rq(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """
+    Multiplies polynomials in quotient ring R_q = Z_q[x] / (x^n + 1).
+    Uses full discrete convolution and exact reduction modulo (x^n + 1).
+    """
+    conv = np.convolve(a, b)
+    res = np.zeros(self.n, dtype=np.int64)
+
+    # Reduction: x^(n+k) = -x^k (mod x^n + 1)
+    for k in range(len(conv)):
+      deg = k % self.n
+      sign = -1 if (k // self.n) % 2 == 1 else 1
+      res[deg] = (res[deg] + sign * conv[k]) % self.q
+
+    return res
+
+  def generate_keypair(
+      self,
+  ) -> tuple[tuple[np.ndarray, np.ndarray], np.ndarray]:
+    """Generates Public Key (a, b) and Secret Key (s)."""
+    a = np.random.randint(0, self.q, size=self.n, dtype=np.int64)
+    s = self.sample_discrete_gaussian()
+    e = self.sample_discrete_gaussian()
+
+    # b = a * s + e (mod q, x^n + 1)
+    b = (self.poly_mul_rq(a, s) + e) % self.q
+    return (a, b), s
+
+  def encapsulate(
+      self, public_key: tuple[np.ndarray, np.ndarray]
+  ) -> tuple[tuple[np.ndarray, np.ndarray], int]:
+    """Encapsulates a secret bit key using public key (a, b)."""
+    a, b = public_key
+    r = self.sample_discrete_gaussian()
+    e1 = self.sample_discrete_gaussian()
+    e2 = self.sample_discrete_gaussian()
+
+    # Secret message bit encoded onto high-order polynomial coefficient
+    msg_bit = np.random.randint(0, 2)
+    m_poly = np.zeros(self.n, dtype=np.int64)
+    m_poly[0] = msg_bit * (self.q // 2)
+
+    u = (self.poly_mul_rq(a, r) + e1) % self.q
+    v = (self.poly_mul_rq(b, r) + e2 + m_poly) % self.q
+
+    return (u, v), msg_bit
+
+  def decapsulate(
+      self, ciphertext: tuple[np.ndarray, np.ndarray], secret_key: np.ndarray
+  ) -> int:
+    """Decapsulates ciphertext (u, v) using secret key s."""
+    u, v = ciphertext
+    s_u = self.poly_mul_rq(u, secret_key)
+    noisy_m = (v - s_u) % self.q
+
+    # Decode bit based on Euclidean proximity to q/2
+    val = noisy_m[0]
+    diff_half = min(abs(val - self.q // 2), self.q - abs(val - self.q // 2))
+    return 1 if diff_half < self.q // 4 else 0
+
+
+if __name__ == "__main__":
+  print("[SYSTEM INIT] Initializing Post-Quantum Ring-LWE KEM Engine...\n")
+  kem = RingLWEKEM(n=256, q=3329)
+
+  pub_key, sec_key = kem.generate_keypair()
+  ciphertext, shared_bit_tx = kem.encapsulate(pub_key)
+  shared_bit_rx = kem.decapsulate(ciphertext, sec_key)
+
+  print(f"[KEYGEN] Ring Dimension (n): {kem.n} | Modulus (q): {kem.q}")
+  print(f"[KEM TRANSMIT] Shared Key Bit Encapsulated: {shared_bit_tx}")
+  print(f"[KEM RECEIVE]  Shared Key Bit Decapsulated: {shared_bit_rx}")
+  print(
+      f"[VERIFICATION] KEM Exchange Success:"
+      f" {shared_bit_tx == shared_bit_rx}\n"
+  )
